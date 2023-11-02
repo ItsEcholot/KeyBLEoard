@@ -5,7 +5,8 @@
 
 TsTask led_tStartupBlink(100 * TASK_MILLISECOND, TASK_FOREVER, &led_startupBlink, nullptr, false, nullptr, &led_startupBlinkOnDisable);
 TsTask led_tAliveBlink(1 * TASK_SECOND, 20, &led_aliveBlink);
-TsTask led_tBLEDisconnectedBlink(100 * TASK_MILLISECOND, TASK_FOREVER, &led_bleDisconnectedBlink, nullptr, false, nullptr, &led_bleDisconnectedBlinkOnDisable);
+TsTask led_tBLEDisconnectedBlink(75 * TASK_MILLISECOND, TASK_FOREVER, &led_bleDisconnectedBlink, nullptr, false, nullptr, &usb_caps_reset_led);
+TsTask led_tBLESlotSaveDone(TASK_IMMEDIATE, TASK_ONCE, &usb_caps_reset_led);
 
 void led_startupBlink()
 {
@@ -45,9 +46,4 @@ void led_bleDisconnectedBlink()
   static bool led_state = true;
   usb_caps_set_led(led_state);
   led_state = !led_state;
-}
-
-void led_bleDisconnectedBlinkOnDisable()
-{
-  usb_caps_reset_led();
 }

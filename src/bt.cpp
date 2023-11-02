@@ -4,6 +4,7 @@
 #include "bt.h"
 #include "ble_bas_status.h"
 #include "led.h"
+#include "usb.h"
 
 #include <utility/bonding.h>
 #include <Adafruit_LittleFS.h>
@@ -222,6 +223,7 @@ void bt_load_slots()
 void bt_learn_device(uint8_t slot)
 {
   printf(PSTR("Learning into slot %u\r\n"), slot);
+  usb_caps_set_led(true);
 
   memcpy(&curr_addr, &slots[slot - 1], sizeof(curr_addr));
 
@@ -242,6 +244,7 @@ void bt_learn_device(uint8_t slot)
   memcpy(&curr_addr, &curr_slot, sizeof(curr_addr));
   connect_to_slot = true;
   manual_disconnect = false;
+  led_tBLESlotSaveDone.enableDelayed(1 * TASK_SECOND);
 }
 
 void bt_select_slot(uint8_t slot)

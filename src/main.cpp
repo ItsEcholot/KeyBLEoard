@@ -26,6 +26,7 @@ void setup() {
   ts.addTask(led_tStartupBlink);
   ts.addTask(led_tAliveBlink);
   ts.addTask(led_tBLEDisconnectedBlink);
+  ts.addTask(led_tBLESlotSaveDone);
   led_tStartupBlink.enable();
 
   bat_tSetup.setSelfDestruct();
