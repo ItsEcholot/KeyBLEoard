@@ -159,7 +159,7 @@ void bt_on_event(ble_evt_t *evt)
   break;
   case BLE_GATTS_EVT_WRITE:
   {
-      led_tBLEDisconnectedBlink.disable();
+    led_tBLEDisconnectedBlink.disable();
   }
   break;
   case BLE_GAP_EVT_DISCONNECTED:
@@ -268,8 +268,6 @@ void bt_select_slot(uint8_t slot)
 
   if (bt_is_connected())
     curr_connection->disconnect();
-
-  // bt_set_adv_data_for_curr_slot();
 }
 
 void bt_set_adv_data_for_curr_slot()
@@ -317,7 +315,9 @@ void bt_set_adv_data_for_curr_slot()
   };
 
   // gap_adv long-live is required by SD v6
-  static ble_gap_adv_data_t gap_adv = {};
+  static ble_gap_adv_data_t gap_adv = {
+      .adv_data = {.p_data = Bluefruit.Advertising.getData(), .len = Bluefruit.Advertising.count()},
+      .scan_rsp_data = {.p_data = Bluefruit.ScanResponse.getData(), .len = Bluefruit.ScanResponse.count()}};
   result = sd_ble_gap_adv_set_configure(&handle, &gap_adv, &adv_params_directed);
 #ifdef _DEBUG_
   printf(PSTR("adv set 0x%08x\r\n"), result);
