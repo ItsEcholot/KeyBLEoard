@@ -191,6 +191,11 @@ void bt_on_key(uint8_t mod, uint8_t *keys)
   blehid.keyboardReport(mod, keys);
 }
 
+void bt_on_consumer(uint16_t value)
+{
+  blehid.consumerReport(value);
+}
+
 void bt_manual_disconnect()
 {
   manual_disconnect = true;

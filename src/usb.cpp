@@ -280,13 +280,15 @@ void KbdRptParser::Parse(USBHID *hid, bool is_rpt_id __attribute__((unused)), ui
 
 void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
 {
+  uint16_t consumer_value = 0;
   bool key_application_pressed = false;
   bool key_escape_pressed = false;
   int8_t key_w_pressed = -1;
   int8_t key_a_pressed = -1;
   int8_t key_s_pressed = -1;
   int8_t key_d_pressed = -1;
-  bool key_number_pressed[11] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // First value true if any number key true
+  bool key_number_pressed[11] = {0}; // First value true if any number key true
+  bool key_fs_pressed[13] = {0}; // First value true if any F-Key true
 
   for (uint8_t i = 0; i < 6; i++)
   {
@@ -318,11 +320,18 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
       key_number_pressed[0] = true;
       key_number_pressed[keys[i] - HID_KEY_1 + 1] = true;
     }
+
+    if (keys[i] >= HID_KEY_F1 && keys[i] <= HID_KEY_F12)
+    {
+      key_fs_pressed[0] = true;
+      key_fs_pressed[keys[i] - HID_KEY_F1 + 1] = true;
+    }
   }
 
   // Key Mutations ----------------------------------
   if (key_application_pressed)
   {
+    // Arrow keys
     if (key_w_pressed != -1)
       keys[key_w_pressed] = HID_KEY_ARROW_UP;
     if (key_a_pressed != -1)
@@ -331,6 +340,60 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
       keys[key_s_pressed] = HID_KEY_ARROW_DOWN;
     if (key_d_pressed != -1)
       keys[key_d_pressed] = HID_KEY_ARROW_RIGHT;
+
+    // Media keys
+    if (key_fs_pressed[0])
+    {
+      memset(keys, 0, sizeof(keys));
+      for (uint8_t i = 1; i < sizeof(key_fs_pressed); i++)
+      {
+        if (key_fs_pressed[i])
+          switch (i)
+          {
+          case 1:
+            consumer_value = 0x070; // Brightness down
+            break;
+          case 2:
+            consumer_value = 0x06F; // Brightness up
+            break;
+          case 3:
+            consumer_value = 0x29F; // Mission-control
+            break;
+          case 4:
+            consumer_value = 0x221; // Search
+            break;
+          case 5:
+            consumer_value = 0x0CF; // Dictation (Kinda not working?)
+            break;
+          case 6:
+            consumer_value = 0x19E; // Lock? (Not working)
+            break;
+          case 7:
+            consumer_value = 0x0B4; // Rewind
+            break;
+          case 8:
+            consumer_value = 0x0CD; // Play / pause
+            break;
+          case 9:
+            consumer_value = 0x0B3; // Fast-forward
+            break;
+          case 10:
+            consumer_value = 0x0E2; // Volume mute
+            break;
+          case 11:
+            consumer_value = 0x0EA; // Volume down
+            break;
+          case 12:
+            consumer_value = 0x0E9; // Volume up
+            break;
+
+          default:
+            break;
+          }
+      }
+    }
+
+    printf("Media Keys: %" SCNd16 "\r\n", consumer_value);
   }
   // Key Mutations ----------------------------------
   // Shortcuts --------------------------------------
@@ -347,13 +410,15 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
       bt_manual_disconnect();
     else if (key_number_pressed[0])
     {
-    for (uint8_t i = 1; i < sizeof(key_number_pressed); i++)
-      if (key_number_pressed[i])
-        selecting_slot = i;
-    return;
+      for (uint8_t i = 1; i < sizeof(key_number_pressed); i++)
+        if (key_number_pressed[i])
+          selecting_slot = i;
+      return;
     }
   }
   // Shortcuts --------------------------------------
+
+  bt_on_consumer(consumer_value);
   bt_on_key(mod, keys);
 }
 

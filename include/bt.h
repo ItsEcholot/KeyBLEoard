@@ -15,6 +15,7 @@ void bt_start_adv();
 void bt_loop();
 void bt_on_event(ble_evt_t* evt);
 void bt_on_key(uint8_t mod, uint8_t *keys);
+void bt_on_consumer(uint16_t value);
 
 void bt_manual_disconnect();
 
