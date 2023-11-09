@@ -280,6 +280,7 @@ void KbdRptParser::Parse(USBHID *hid, bool is_rpt_id __attribute__((unused)), ui
 
 void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
 {
+  static uint16_t last_consumer_value = 0;
   uint16_t consumer_value = 0;
   bool key_application_pressed = false;
   bool key_escape_pressed = false;
@@ -418,7 +419,11 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
   }
   // Shortcuts --------------------------------------
 
-  bt_on_consumer(consumer_value);
+  if (last_consumer_value != consumer_value)
+  {
+    bt_on_consumer(consumer_value);
+    last_consumer_value = consumer_value;
+  }
   bt_on_key(mod, keys);
 }
 
