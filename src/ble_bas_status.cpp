@@ -1,10 +1,16 @@
 #include "bluefruit.h"
 #include "ble_bas_status.h"
 
-#define UUID16_CHR_BATTERY_LEVEL_STATUS 0x2BED
+// NOTE: This service is intentionally *not* UUID16_SVC_BATTERY (0x180F).
+// Having multiple 0x180F Battery Service instances can confuse some clients
+// (notably newer macOS), causing them to miss the standard 0x2A19 Battery Level.
+// We keep the standard Battery Level in BLEBas and expose extended status via a
+// vendor-specific service.
+#define UUID16_SVC_BATTERY_LEVEL_STATUS 0xFFF0
+#define UUID16_CHR_BATTERY_LEVEL_STATUS 0xFFF1
 
 BLEBasStatus::BLEBasStatus(void) :
-  BLEService(UUID16_SVC_BATTERY), _battery(UUID16_CHR_BATTERY_LEVEL_STATUS)
+  BLEService(UUID16_SVC_BATTERY_LEVEL_STATUS), _battery(UUID16_CHR_BATTERY_LEVEL_STATUS)
 {
 
 }

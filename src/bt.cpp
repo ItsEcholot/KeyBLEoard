@@ -29,6 +29,23 @@ bool manual_disconnect = false;
 bool connect_to_slot = false;
 ble_gap_addr_t slots[10];
 ble_gap_addr_t curr_slot;
+static bool battery_notified_this_connection = false;
+
+static bool bt_push_battery(bool notify)
+{
+  uint8_t battery_percentage = (uint8_t)round(bat_percentage_ra.getAverage());
+  bool charging = bat_charging;
+
+  blebas.write(battery_percentage);
+  blebasstatus.write(battery_percentage, charging);
+
+  if (!notify || !Bluefruit.connected())
+    return false;
+
+  bool ok = blebas.notify(battery_percentage);
+  blebasstatus.notify(battery_percentage, charging);
+  return ok;
+}
 
 void bt_setup()
 {
@@ -128,6 +145,8 @@ void bt_on_event(ble_evt_t *evt)
     curr_connection = Bluefruit.Connection(evt->evt.common_evt.conn_handle);
 
     memset(&curr_bond_key, 0, sizeof(bond_keys_t));
+    battery_notified_this_connection = false;
+    bt_push_battery(false);
   }
   break;
   case BLE_GAP_EVT_CONN_SEC_UPDATE:
@@ -160,6 +179,13 @@ void bt_on_event(ble_evt_t *evt)
   case BLE_GATTS_EVT_WRITE:
   {
     led_tBLEDisconnectedBlink.disable();
+    // macOS often does not proactively read Battery Level on connect anymore and
+    // relies on notifications once CCCD is enabled. The first GATT write is
+    // commonly the CCCD write that enables notifications.
+    if (!battery_notified_this_connection)
+    {
+      battery_notified_this_connection = bt_push_battery(true);
+    }
   }
   break;
   case BLE_GAP_EVT_DISCONNECTED:
@@ -177,6 +203,7 @@ void bt_on_event(ble_evt_t *evt)
     }
 
     memset(&curr_bond_key, 0, sizeof(bond_keys_t));
+    battery_notified_this_connection = false;
     Bluefruit.Advertising.start(0);
     if (connect_to_slot)
       bt_set_adv_data_for_curr_slot();
