@@ -22,7 +22,7 @@ BLEHidAdafruit blehid;
 TsTask bt_tSetup(TASK_IMMEDIATE, TASK_ONCE, &bt_setup);
 TsTask bt_tLoop(10 * TASK_SECOND, TASK_FOREVER, &bt_loop);
 
-BLEConnection *curr_connection;
+BLEConnection *curr_connection = nullptr;
 ble_gap_addr_t curr_addr;
 bond_keys_t curr_bond_key;
 bool manual_disconnect = false;
@@ -129,8 +129,7 @@ void bt_loop()
 
 bool bt_is_connected()
 {
-  uint8_t null_address[6] = {0, 0, 0, 0, 0, 0};
-  return memcmp(curr_bond_key.peer_id.id_addr_info.addr, null_address, sizeof(curr_addr.addr)) != 0;
+  return Bluefruit.connected();
 }
 
 void bt_on_event(ble_evt_t *evt)
@@ -194,7 +193,10 @@ void bt_on_event(ble_evt_t *evt)
     printf(PSTR("BLE Disconnected reason: %2.2x\r\n"), reason);
     if (reason == BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION)
     {
-      bt_manual_disconnect();
+      // Set flags directly — calling bt_manual_disconnect() here would try
+      // to disconnect an already-disconnected link.
+      manual_disconnect = true;
+      connect_to_slot = false;
     }
     else if (reason == BLE_HCI_CONN_TERMINATED_DUE_TO_MIC_FAILURE)
     {
@@ -227,7 +229,7 @@ void bt_manual_disconnect()
 {
   manual_disconnect = true;
   connect_to_slot = false;
-  if (bt_is_connected())
+  if (bt_is_connected() && curr_connection)
   {
     curr_connection->disconnect();
   }
@@ -257,7 +259,8 @@ void bt_learn_device(uint8_t slot)
   printf(PSTR("Learning into slot %u\r\n"), slot);
   usb_caps_set_led(true);
 
-  memcpy(&curr_addr, &slots[slot - 1], sizeof(curr_addr));
+  // Save current connection address into the in-memory slot array.
+  memcpy(&slots[slot - 1], &curr_addr, sizeof(curr_addr));
 
   char filename[BT_SLOT_FILENAME_LENGTH];
   sprintf(filename, BT_SLOT_PATH, slot);
@@ -273,7 +276,9 @@ void bt_learn_device(uint8_t slot)
 
   file.write((uint8_t const *)&curr_addr, sizeof(curr_addr));
   file.close();
-  memcpy(&curr_addr, &curr_slot, sizeof(curr_addr));
+
+  // Update curr_slot so that on future reconnects we target this device.
+  memcpy(&curr_slot, &curr_addr, sizeof(curr_slot));
   connect_to_slot = true;
   manual_disconnect = false;
   led_tBLESlotSaveDone.enableDelayed(1 * TASK_SECOND);
@@ -300,6 +305,8 @@ void bt_select_slot(uint8_t slot)
 
   if (bt_is_connected())
     curr_connection->disconnect();
+  else
+    bt_set_adv_data_for_curr_slot(); // Immediately retarget advertising when already disconnected.
 }
 
 void bt_set_adv_data_for_curr_slot()
@@ -314,9 +321,8 @@ void bt_set_adv_data_for_curr_slot()
   printf("Loaded key %s, %2.2x irk %2.2x", res ? "true" : "false\r\n", slot_bond_key.peer_id.id_addr_info.addr[5], slot_bond_key.peer_id.id_info.irk[15]);
 #endif
 
-  const ble_gap_id_key_t *p_key1 = &slot_bond_key.peer_id;
-  const ble_gap_id_key_t *const *pp_id_keys = {&p_key1};
-  uint32_t result = sd_ble_gap_device_identities_set(pp_id_keys, NULL, 1);
+  const ble_gap_id_key_t *pp_id_keys = &slot_bond_key.peer_id;
+  uint32_t result = sd_ble_gap_device_identities_set(&pp_id_keys, NULL, 1);
 #ifdef _DEBUG_
   printf(PSTR("device identities set 0x%08x\r\n"), result);
 #endif
