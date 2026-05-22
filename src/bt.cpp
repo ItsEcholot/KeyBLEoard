@@ -153,16 +153,14 @@ void bt_on_event(ble_evt_t *evt)
     curr_connection = Bluefruit.Connection(evt->evt.common_evt.conn_handle);
     if (curr_connection->loadBondKey(&curr_bond_key))
     {
-      if (manual_disconnect)
+      // If the client that disconnected us is trying to immediately reconnect, refuse it.
+      // Other devices remain connectable.
+      if (manual_disconnect &&
+          memcmp(curr_addr.addr, curr_bond_key.peer_id.id_addr_info.addr,
+                 sizeof(curr_addr.addr)) == 0)
       {
-        for (uint8_t i = 0; i < 10; i++)
-        {
-          if (memcmp(slots[i].addr, curr_bond_key.peer_id.id_addr_info.addr, sizeof(curr_bond_key.peer_id.id_addr_info.addr)) == 0)
-          {
-            curr_connection->disconnect();
-            return;
-          }
-        }
+        curr_connection->disconnect();
+        return;
       }
       curr_addr = curr_bond_key.peer_id.id_addr_info;
       printf(PSTR("BLE Connected %2.2x\r\n"), curr_addr.addr[5]);
