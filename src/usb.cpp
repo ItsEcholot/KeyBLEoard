@@ -345,7 +345,7 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
     // Media keys
     if (key_fs_pressed[0])
     {
-      memset(keys, 0, sizeof(keys));
+      memset(keys, 0, 6);
       for (uint8_t i = 1; i < sizeof(key_fs_pressed); i++)
       {
         if (key_fs_pressed[i])
@@ -399,11 +399,14 @@ void KbdRptParser::OnKey(uint8_t mod, uint8_t *keys)
   // Key Mutations ----------------------------------
   // Shortcuts --------------------------------------
 
-  // Was pressed but released before learning could start
-  if (selecting_slot > 0 && !key_number_pressed[0])
+  // Chord released before the learn hold time elapsed -> plain slot switch.
+  // Releasing either half ends the gesture, otherwise letting go of APPLICATION while
+  // still holding the number key would keep the learn countdown running.
+  if (selecting_slot > 0 && (!key_number_pressed[0] || !key_application_pressed))
+  {
     bt_select_slot(selecting_slot);
-  if (!key_number_pressed[0])
     selecting_slot = 0;
+  }
 
   if (key_application_pressed)
   {

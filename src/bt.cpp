@@ -13,6 +13,7 @@
 #define BT_SLOT_DIR "/slot"
 #define BT_SLOT_PATH "/slot/%u"
 #define BT_SLOT_FILENAME_LENGTH sizeof(BT_SLOT_PATH)
+#define BT_SLOT_COUNT 10
 
 BLEDis bledis;
 BLEBas blebas;
@@ -23,13 +24,37 @@ TsTask bt_tSetup(TASK_IMMEDIATE, TASK_ONCE, &bt_setup);
 TsTask bt_tLoop(10 * TASK_SECOND, TASK_FOREVER, &bt_loop);
 
 BLEConnection *curr_connection = nullptr;
-ble_gap_addr_t curr_addr;
-bond_keys_t curr_bond_key;
+ble_gap_addr_t curr_addr;      // Identity address of the peer we last identified
+bool curr_addr_valid = false;  // curr_addr holds a usable identity address
+bool curr_peer_known = false;  // ...and it belongs to the peer we are connected to right now
 bool manual_disconnect = false;
 bool connect_to_slot = false;
-ble_gap_addr_t slots[10];
+ble_gap_addr_t slots[BT_SLOT_COUNT];
+bool slot_valid[BT_SLOT_COUNT] = {false};
 ble_gap_addr_t curr_slot;
 static bool battery_notified_this_connection = false;
+
+static bool bt_addr_is_empty(const ble_gap_addr_t &addr)
+{
+  for (uint8_t i = 0; i < sizeof(addr.addr); i++)
+    if (addr.addr[i] != 0)
+      return false;
+  return true;
+}
+
+// Remember the identity address of the peer on the current link. Learning writes this
+// address into a slot, so it must only ever be updated from a positively identified peer.
+static void bt_set_curr_peer(const ble_gap_addr_t &id_addr)
+{
+  if (bt_addr_is_empty(id_addr))
+    return;
+
+  curr_addr = id_addr;
+  curr_addr_valid = true;
+  curr_peer_known = true;
+  manual_disconnect = false;
+  printf(PSTR("BLE peer identified %2.2x\r\n"), curr_addr.addr[5]);
+}
 
 static bool bt_push_battery(bool notify)
 {
@@ -141,36 +166,56 @@ void bt_on_event(ble_evt_t *evt)
   {
   case BLE_GAP_EVT_CONNECTED:
   {
-    curr_connection = Bluefruit.Connection(evt->evt.common_evt.conn_handle);
+    curr_connection = Bluefruit.Connection(evt->evt.gap_evt.conn_handle);
 
-    memset(&curr_bond_key, 0, sizeof(bond_keys_t));
+    // The peer is not identified until it is either resolved against a stored bond
+    // (CONN_SEC_UPDATE) or has just finished bonding (AUTH_STATUS).
+    curr_peer_known = false;
     battery_notified_this_connection = false;
     bt_push_battery(false);
   }
   break;
   case BLE_GAP_EVT_CONN_SEC_UPDATE:
   {
-    curr_connection = Bluefruit.Connection(evt->evt.common_evt.conn_handle);
-    if (curr_connection->loadBondKey(&curr_bond_key))
+    // Reconnect of an already bonded peer
+    curr_connection = Bluefruit.Connection(evt->evt.gap_evt.conn_handle);
+    if (!curr_connection)
+      break;
+
+    bond_keys_t bond_key;
+    if (curr_connection->loadBondKey(&bond_key))
     {
       // If the client that disconnected us is trying to immediately reconnect, refuse it.
       // Other devices remain connectable.
-      if (manual_disconnect &&
-          memcmp(curr_addr.addr, curr_bond_key.peer_id.id_addr_info.addr,
+      if (manual_disconnect && curr_addr_valid &&
+          memcmp(curr_addr.addr, bond_key.peer_id.id_addr_info.addr,
                  sizeof(curr_addr.addr)) == 0)
       {
         curr_connection->disconnect();
-        return;
+        break;
       }
-      curr_addr = curr_bond_key.peer_id.id_addr_info;
-      printf(PSTR("BLE Connected %2.2x\r\n"), curr_addr.addr[5]);
-      manual_disconnect = false;
+      bt_set_curr_peer(bond_key.peer_id.id_addr_info);
 #ifdef _DEBUG_
       printf(PSTR("Loaded bond keys successfully\n"));
       printf(PSTR("Printing BLE bonding table"));
       bond_print_list(BLE_GAP_ROLE_PERIPH);
 #endif
     }
+  }
+  break;
+  case BLE_GAP_EVT_AUTH_STATUS:
+  {
+    // First-time pairing. The bond keys are only stored here, *after* CONN_SEC_UPDATE has
+    // already fired, and the flash write itself is deferred to the callback thread. So
+    // loading them back would still fail; take the identity address straight off the
+    // connection instead. Without this curr_addr keeps pointing at the previously
+    // connected device and learning a freshly paired device saves the wrong address.
+    if (evt->evt.gap_evt.params.auth_status.auth_status != BLE_GAP_SEC_STATUS_SUCCESS)
+      break;
+
+    curr_connection = Bluefruit.Connection(evt->evt.gap_evt.conn_handle);
+    if (curr_connection && curr_connection->bonded())
+      bt_set_curr_peer(curr_connection->getPeerAddr());
   }
   break;
   case BLE_GATTS_EVT_WRITE:
@@ -196,13 +241,16 @@ void bt_on_event(ble_evt_t *evt)
       manual_disconnect = true;
       connect_to_slot = false;
     }
-    else if (reason == BLE_HCI_CONN_TERMINATED_DUE_TO_MIC_FAILURE)
+    else if (reason == BLE_HCI_CONN_TERMINATED_DUE_TO_MIC_FAILURE && curr_peer_known)
     {
       // Remove the current bond key, it is obviously no longer valid.
-      bond_remove_key(BLE_GAP_ROLE_PERIPH, &curr_bond_key.peer_id.id_addr_info);
+      bond_remove_key(BLE_GAP_ROLE_PERIPH, &curr_addr);
+      curr_addr_valid = false;
     }
 
-    memset(&curr_bond_key, 0, sizeof(bond_keys_t));
+    // Bluefruit destroys the BLEConnection object before this callback runs.
+    curr_connection = nullptr;
+    curr_peer_known = false;
     battery_notified_this_connection = false;
     Bluefruit.Advertising.start(0);
     if (connect_to_slot)
@@ -235,8 +283,10 @@ void bt_manual_disconnect()
 
 void bt_load_slots()
 {
-  for (uint8_t i = 1; i <= 10; i++)
+  for (uint8_t i = 1; i <= BT_SLOT_COUNT; i++)
   {
+    slot_valid[i - 1] = false;
+
     char filename[BT_SLOT_FILENAME_LENGTH];
     sprintf(filename, BT_SLOT_PATH, i);
 
@@ -245,20 +295,43 @@ void bt_load_slots()
 
     Adafruit_LittleFS_Namespace::File file(InternalFS);
     if (!file.open(filename, Adafruit_LittleFS_Namespace::FILE_O_READ))
-      printf(PSTR("Couldn't open slot"));
+    {
+      printf(PSTR("Couldn't open slot %u\r\n"), i);
+      continue;
+    }
 
-    file.read(&slots[i - 1], sizeof(curr_slot));
+    bool read_ok = file.read(&slots[i - 1], sizeof(slots[0])) == (int)sizeof(slots[0]);
     file.close();
+
+    // An all-zero address would whitelist a peer that can never connect.
+    slot_valid[i - 1] = read_ok && !bt_addr_is_empty(slots[i - 1]);
+    if (!slot_valid[i - 1])
+      printf(PSTR("Slot %u is empty or corrupt\r\n"), i);
+    else
+      printf(PSTR("Loaded slot %u: %2.2x\r\n"), i, slots[i - 1].addr[5]);
   }
 }
 
 void bt_learn_device(uint8_t slot)
 {
-  printf(PSTR("Learning into slot %u\r\n"), slot);
+  if (slot < 1 || slot > BT_SLOT_COUNT)
+    return;
+
+  // Only ever learn a peer we have positively identified on the current link. Otherwise we
+  // would store the previously connected device's address - or an all-zero address right
+  // after boot - and silently destroy the slot.
+  if (!bt_is_connected() || !curr_peer_known)
+  {
+    printf(PSTR("Refusing to learn slot %u: no identified peer connected\r\n"), slot);
+    return;
+  }
+
+  printf(PSTR("Learning %2.2x into slot %u\r\n"), curr_addr.addr[5], slot);
   usb_caps_set_led(true);
 
   // Save current connection address into the in-memory slot array.
   memcpy(&slots[slot - 1], &curr_addr, sizeof(curr_addr));
+  slot_valid[slot - 1] = true;
 
   char filename[BT_SLOT_FILENAME_LENGTH];
   sprintf(filename, BT_SLOT_PATH, slot);
@@ -271,9 +344,11 @@ void bt_learn_device(uint8_t slot)
   Adafruit_LittleFS_Namespace::File file(filename, Adafruit_LittleFS_Namespace::FILE_O_WRITE, InternalFS);
   if (!(file))
     printf(PSTR("Failed to create File obj for learning device\r\n"));
-
-  file.write((uint8_t const *)&curr_addr, sizeof(curr_addr));
-  file.close();
+  else
+  {
+    file.write((uint8_t const *)&curr_addr, sizeof(curr_addr));
+    file.close();
+  }
 
   // Update curr_slot so that on future reconnects we target this device.
   memcpy(&curr_slot, &curr_addr, sizeof(curr_slot));
@@ -284,24 +359,21 @@ void bt_learn_device(uint8_t slot)
 
 void bt_select_slot(uint8_t slot)
 {
-  manual_disconnect = false;
-
-  char filename[BT_SLOT_FILENAME_LENGTH];
-  sprintf(filename, BT_SLOT_PATH, slot);
-
-  if (!InternalFS.exists(BT_SLOT_DIR) || !InternalFS.exists(filename))
+  if (slot < 1 || slot > BT_SLOT_COUNT)
     return;
 
-  Adafruit_LittleFS_Namespace::File file(InternalFS);
-  if (!file.open(filename, Adafruit_LittleFS_Namespace::FILE_O_READ))
-    printf(PSTR("Couldn't open slot"));
+  if (!slot_valid[slot - 1])
+  {
+    printf(PSTR("Slot %u is empty, staying on the current device\r\n"), slot);
+    return;
+  }
 
-  file.read(&curr_slot, sizeof(curr_slot));
-  file.close();
+  manual_disconnect = false;
+  memcpy(&curr_slot, &slots[slot - 1], sizeof(curr_slot));
   printf(PSTR("Connecting to slot %u: %2.2x\r\n"), slot, curr_slot.addr[5]);
   connect_to_slot = true;
 
-  if (bt_is_connected())
+  if (bt_is_connected() && curr_connection)
     curr_connection->disconnect();
   else
     bt_set_adv_data_for_curr_slot(); // Immediately retarget advertising when already disconnected.
@@ -309,14 +381,26 @@ void bt_select_slot(uint8_t slot)
 
 void bt_set_adv_data_for_curr_slot()
 {
+  bond_keys_t slot_bond_key;
+  if (!bond_load_keys(BLE_GAP_ROLE_PERIPH, &curr_slot, &slot_bond_key))
+  {
+    // No bond for that address (peer forgot us, flash cleared, ...). Whitelisting it anyway
+    // would leave us advertising to a peer that can never connect and lock out every other
+    // device, so drop back to normal connectable advertising.
+    printf(PSTR("No bond keys for slot addr %2.2x, advertising to everyone\r\n"), curr_slot.addr[5]);
+    connect_to_slot = false;
+    Bluefruit.Advertising.stop();
+    sd_ble_gap_whitelist_set(NULL, 0);
+    sd_ble_gap_device_identities_set(NULL, NULL, 0);
+    Bluefruit.Advertising.start(0);
+    return;
+  }
+
   uint8_t handle = 0;
   sd_ble_gap_adv_stop(handle);
 
-  bond_keys_t slot_bond_key;
-  bool res = bond_load_keys(BLE_GAP_ROLE_PERIPH, &curr_slot, &slot_bond_key);
-
 #ifdef _DEBUG_
-  printf("Loaded key %s, %2.2x irk %2.2x", res ? "true" : "false\r\n", slot_bond_key.peer_id.id_addr_info.addr[5], slot_bond_key.peer_id.id_info.irk[15]);
+  printf(PSTR("Loaded key for %2.2x irk %2.2x\r\n"), slot_bond_key.peer_id.id_addr_info.addr[5], slot_bond_key.peer_id.id_info.irk[15]);
 #endif
 
   const ble_gap_id_key_t *pp_id_keys = &slot_bond_key.peer_id;
